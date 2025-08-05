@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 
 # Título informativo no terminal
 echo "🔴 Live A&E - FFmpeg + VLC"
@@ -29,5 +29,5 @@ hls/playlist.m3u8 &
 # Aguarda FFmpeg gerar a playlist
 sleep 5
 
-# Tenta abrir o VLC apontando para o .m3u8
+# Abre o link local no navegador padrão (VLC ou browser)
 termux-open-url "http://127.0.0.1:8080/playlist.m3u8"

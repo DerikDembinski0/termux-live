@@ -1,64 +1,217 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
 
-# ▶️ HLS local a partir de um M3U8 legal/sem DRM
-M3U8_URL="https://cdn001.sytrano.cfd/C/chefe-de-guerra-2025/01-temporada/01/stream.m3u8"
+# Cores para o terminal
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+NC='\033[0m' # No Color
 
-HEADERS="${HEADERS:-}"
+# URL do stream
+STREAM_URL="https://cdn001.sytrano.cfd/C/chefe-de-guerra-2025/01-temporada/01/stream.m3u8"
 
-echo "▶️ Iniciando pipeline FFmpeg → HLS local"
-command -v ffmpeg >/dev/null || { echo "[X] ffmpeg não encontrado"; exit 1; }
-command -v python3 >/dev/null || { echo "[X] python3 não encontrado"; exit 1; }
+# Headers necessários
+HEADERS="referer: https://www.weekseries.info/\r\norigin: https://www.weekseries.info\r\nuser-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
 
-mkdir -p hls
-
-cleanup() {
-  echo "⏹️ Encerrando processos..."
-  pkill -f "python3 -m http.server 8080" || true
-  pkill -f "ffmpeg .* hls/playlist.m3u8" || true
+# Função para limpar a tela
+clear_screen() {
+    clear
 }
-trap cleanup EXIT
 
-# Inicia servidor HTTP local na porta 8080
-(cd hls && nohup python3 -m http.server 8080 >/dev/null 2>&1 &)
-sleep 2
+# Função para exibir o menu
+show_menu() {
+    clear_screen
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║                    M3U8 PLAYER INTERFACE                     ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo
+    echo -e "${GREEN}[1]${NC} ▶️  Reproduzir Stream"
+    echo -e "${YELLOW}[2]${NC} ⚙️  Opções de Reprodução"  
+    echo -e "${BLUE}[3]${NC} 📺 Reproduzir em Tela Cheia"
+    echo -e "${PURPLE}[4]${NC} 🔊 Reproduzir com Volume Específico"
+    echo -e "${CYAN}[5]${NC} 🎬 Reproduzir com Qualidade Específica"
+    echo -e "${RED}[6]${NC} ❌ Sair"
+    echo
+}
 
-HDR_ARGS=()
-if [[ -n "$HEADERS" ]]; then
-  HDR_ARGS=(-headers "$HEADERS")
-fi
+# Função para exibir controles
+show_controls() {
+    echo -e "${YELLOW}🎮 CONTROLES DO PLAYER:${NC}"
+    echo "───────────────────────────────────────"
+    echo "ESPAÇO     - Play/Pause"
+    echo "↑↓         - Volume +/-"  
+    echo "←→         - Retroceder/Avançar 10s"
+    echo "F          - Tela cheia"
+    echo "Q ou ESC   - Fechar player"
+    echo "───────────────────────────────────────"
+    echo
+}
 
-# Inicia FFmpeg para gerar o HLS local
-ffmpeg "${HDR_ARGS[@]}" \
-  -i "$M3U8_URL" \
-  -c:v copy -c:a copy \
-  -f hls \
-  -hls_time 4 \
-  -hls_list_size 6 \
-  -hls_flags delete_segments+independent_segments \
-  -hls_segment_filename "hls/seg-%03d.ts" \
-  "hls/playlist.m3u8" \
-  >/dev/null 2>&1 &
+# Função para reprodução normal
+play_normal() {
+    clear_screen
+    echo -e "${GREEN}▶️ Iniciando reprodução...${NC}"
+    echo
+    show_controls
+    read -p "Pressione ENTER para continuar..."
+    
+    ffplay -headers "$HEADERS" \
+           -window_title "Chefe de Guerra - Episódio 01" \
+           -autoexit "$STREAM_URL"
+    
+    echo
+    echo -e "${GREEN}✅ Reprodução finalizada!${NC}"
+    read -p "Pressione ENTER para continuar..."
+}
 
-# Aguarda gerar os primeiros segmentos
-sleep 5
+# Função para mostrar opções
+show_options() {
+    clear_screen
+    echo -e "${YELLOW}⚙️ OPÇÕES DE REPRODUÇÃO${NC}"
+    echo "────────────────────────────────────"
+    echo
+    echo "Opções disponíveis para FFplay:"
+    echo "• -fs : Iniciar em tela cheia"
+    echo "• -volume 50 : Definir volume (0-100)"
+    echo "• -vf scale=1280:720 : Redimensionar vídeo"
+    echo "• -loop 0 : Loop infinito"
+    echo "• -ss 00:30 : Pular para 30 segundos"
+    echo
+    read -p "Pressione ENTER para voltar..."
+}
 
-# URL local do stream
-LOCAL_URL="http://127.0.0.1:8080/playlist.m3u8"
+# Função para tela cheia
+play_fullscreen() {
+    clear_screen
+    echo -e "${BLUE}📺 Reproduzindo em TELA CHEIA...${NC}"
+    echo "Pressione ESC ou Q para sair da tela cheia"
+    read -p "Pressione ENTER para continuar..."
+    
+    ffplay -fs \
+           -headers "$HEADERS" \
+           -window_title "Chefe de Guerra - Tela Cheia" \
+           -autoexit "$STREAM_URL"
+    
+    echo -e "${GREEN}✅ Reprodução finalizada!${NC}"
+    read -p "Pressione ENTER para continuar..."
+}
 
-# Abre direto no player disponível
-if command -v mpv >/dev/null; then
-  echo "🎬 Abrindo no MPV..."
-  nohup mpv "$LOCAL_URL" >/dev/null 2>&1 &
-elif command -v vlc >/dev/null; then
-  echo "🎬 Abrindo no VLC..."
-  nohup vlc "$LOCAL_URL" >/dev/null 2>&1 &
-elif command -v termux-open-url >/dev/null; then
-  echo "🌐 Abrindo no navegador..."
-  termux-open-url "$LOCAL_URL"
-else
-  echo "Abra manualmente no player: $LOCAL_URL"
-fi
+# Função para volume específico
+play_with_volume() {
+    clear_screen
+    echo -e "${PURPLE}🔊 CONTROLE DE VOLUME${NC}"
+    read -p "Digite o volume desejado (0-100): " vol
+    
+    # Define volume padrão se não foi informado
+    if [ -z "$vol" ]; then
+        vol=50
+    fi
+    
+    echo "Iniciando com volume $vol..."
+    read -p "Pressione ENTER para continuar..."
+    
+    ffplay -volume "$vol" \
+           -headers "$HEADERS" \
+           -window_title "Chefe de Guerra - Vol: $vol" \
+           -autoexit "$STREAM_URL"
+    
+    echo -e "${GREEN}✅ Reprodução finalizada!${NC}"
+    read -p "Pressione ENTER para continuar..."
+}
 
-# Mantém rodando enquanto o ffmpeg estiver ativo
-wait
+# Função para qualidade específica
+play_with_quality() {
+    clear_screen
+    echo -e "${CYAN}🎬 OPÇÕES DE QUALIDADE${NC}"
+    echo "─────────────────────────────────"
+    echo "[1] 480p  (854x480)"
+    echo "[2] 720p  (1280x720)" 
+    echo "[3] 1080p (1920x1080)"
+    echo "[4] Original"
+    echo
+    read -p "Escolha a qualidade (1-4): " qual
+    
+    case $qual in
+        1)
+            resolution="-vf scale=854:480"
+            ;;
+        2)
+            resolution="-vf scale=1280:720"
+            ;;
+        3)
+            resolution="-vf scale=1920:1080"
+            ;;
+        4)
+            resolution=""
+            ;;
+        *)
+            resolution=""
+            ;;
+    esac
+    
+    echo "Iniciando reprodução..."
+    read -p "Pressione ENTER para continuar..."
+    
+    ffplay $resolution \
+           -headers "$HEADERS" \
+           -window_title "Chefe de Guerra" \
+           -autoexit "$STREAM_URL"
+    
+    echo -e "${GREEN}✅ Reprodução finalizada!${NC}"
+    read -p "Pressione ENTER para continuar..."
+}
+
+# Função principal
+main() {
+    # Verifica se o ffplay está instalado
+    if ! command -v ffplay &> /dev/null; then
+        echo -e "${RED}❌ ERRO: ffplay não encontrado!${NC}"
+        echo "Instale o FFmpeg primeiro:"
+        echo "• Ubuntu/Debian: sudo apt install ffmpeg"
+        echo "• macOS: brew install ffmpeg"
+        echo "• Arch: sudo pacman -S ffmpeg"
+        exit 1
+    fi
+    
+    while true; do
+        show_menu
+        read -p "Escolha uma opção (1-6): " opcao
+        
+        case $opcao in
+            1)
+                play_normal
+                ;;
+            2)
+                show_options
+                ;;
+            3)
+                play_fullscreen
+                ;;
+            4)
+                play_with_volume
+                ;;
+            5)
+                play_with_quality
+                ;;
+            6)
+                clear_screen
+                echo
+                echo -e "${GREEN}👋 Obrigado por usar o M3U8 Player!${NC}"
+                echo
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Opção inválida!${NC}"
+                read -p "Pressione ENTER para continuar..."
+                ;;
+        esac
+    done
+}
+
+# Executar o script
+main

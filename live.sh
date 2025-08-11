@@ -1,10 +1,16 @@
 #!/bin/bash
-echo "🚀 Iniciando servidor proxy..."
+set -euo pipefail
+
+PORT=8080
+M3U8_NAME="stream.m3u8"
+
+echo "🚀 Iniciando servidor proxy na porta $PORT..."
 
 # Mata processos anteriores na porta 8080
-pkill -f "python.*8080" 2>/dev/null
+pkill -f "python.*${PORT}" 2>/dev/null || true
 
-python3 - <<'PY'
+# ---- Servidor Python (proxy HLS) ----
+python3 - <<'PY' &
 import http.server, urllib.request, urllib.parse, urllib.error
 from urllib.parse import urljoin, urlparse, parse_qs, quote, unquote
 
@@ -41,20 +47,17 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         path = self.path
         self.log(f"Requisição recebida: {path}")
 
-        # 1) Endpoint local do m3u8
+        # m3u8 principal
         if path == f'/{M3U8_NAME}':
             try:
                 url = urljoin(BASE_URL, M3U8_NAME)
                 data, _ = fetch(url)
                 text = data.decode('utf-8', errors='ignore')
 
-                # Reescreve URIs (segmentos, chaves, legendas) para passar por /proxy?u=
                 out_lines = []
                 for line in text.splitlines():
                     if line.startswith('#'):
-                        # Trata EXT-X-KEY URI="..."
                         if 'EXT-X-KEY' in line and 'URI=' in line:
-                            # extrai valor entre aspas
                             try:
                                 before, rest = line.split('URI=', 1)
                                 if rest.startswith('"'):
@@ -62,12 +65,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                                     orig_uri = q[1]
                                     abs_u = urljoin(BASE_URL, orig_uri)
                                     prox = f'/proxy?u={quote(abs_u)}'
-                                    line = f'{before}URI="{prox}"' + '"'.join(q[2:])  # mantém o resto, se houver
+                                    line = f'{before}URI="{prox}"' + '"'.join(q[2:])
                             except Exception:
                                 pass
                         out_lines.append(line)
                     elif line.strip():
-                        # Linha é um URI de mídia (relativo ou absoluto)
                         abs_u = urljoin(BASE_URL, line.strip())
                         prox = f'/proxy?u={quote(abs_u)}'
                         out_lines.append(prox)
@@ -86,7 +88,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error(502, f'Erro ao obter m3u8: {e}')
             return
 
-        # 2) Endpoint genérico de proxy: /proxy?u=<url_absoluta>
+        # Proxy genérico
         if path.startswith('/proxy'):
             try:
                 q = parse_qs(urlparse(path).query)
@@ -108,7 +110,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error(502, f'Erro no proxy: {e}')
             return
 
-        # 3) Fallback: se o player pedir /01_000.ts etc., busca relativo ao BASE_URL
+        # Fallback: segmentos diretos
         try:
             rel = path.lstrip('/')
             target = urljoin(BASE_URL, rel)
@@ -127,9 +129,53 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 if __name__ == '__main__':
     from socketserver import TCPServer
     srv = TCPServer(('', PORT), ProxyHandler)
-    print(f"✅ SERVIDOR PROXY ATIVO!\nURL LOCAL: http://127.0.0.1:{PORT}/{M3U8_NAME}")
+    print(f"✅ SERVIDOR PROXY ATIVO! URL: http://127.0.0.1:{PORT}/{M3U8_NAME}", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
 PY
+
+SERVER_PID=$!
+trap 'echo "🧹 Encerrando..."; kill $SERVER_PID 2>/dev/null || true' EXIT
+
+# ---- Aguarda o servidor responder ao m3u8 ----
+echo "⏳ Aguardando http://127.0.0.1:${PORT}/${M3U8_NAME} ficar disponível..."
+for i in {1..30}; do
+  if curl -fsS "http://127.0.0.1:${PORT}/${M3U8_NAME}" >/dev/null; then
+    echo "✅ Servidor OK."
+    break
+  fi
+  sleep 0.5
+  if [[ $i -eq 30 ]]; then
+    echo "❌ Timeout esperando o servidor. Abortando."
+    exit 1
+  fi
+done
+
+# ---- Verificações de ADB/Dispositivo ----
+if ! command -v adb >/dev/null 2>&1; then
+  echo "❌ adb não encontrado no PATH. Instale o Android Platform Tools."
+  exit 1
+fi
+
+if ! adb get-state 1>/dev/null 2>&1; then
+  echo "❌ Nenhum dispositivo ADB detectado. Conecte/autorize o telefone e tente de novo."
+  exit 1
+fi
+
+# ---- Força o popup “Abrir com…” no Android ----
+echo "📱 Abrindo chooser no Android para o HLS..."
+if ! adb shell am start -a android.intent.action.VIEW \
+   -d "http://127.0.0.1:${PORT}/${M3U8_NAME}" \
+   -t "application/vnd.apple.mpegurl" \
+   --chooser 1>/dev/null; then
+  echo "⚠️ Falhou com application/vnd.apple.mpegurl, tentando application/x-mpegURL..."
+  adb shell am start -a android.intent.action.VIEW \
+     -d "http://127.0.0.1:${PORT}/${M3U8_NAME}" \
+     -t "application/x-mpegURL" \
+     --chooser
+fi
+
+echo "🎬 Seletor de apps aberto. Escolha o player."
+wait $SERVER_PID

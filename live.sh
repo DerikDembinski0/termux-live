@@ -3,13 +3,14 @@ set -euo pipefail
 
 PORT=8080
 M3U8_NAME="stream.m3u8"
+URL="http://127.0.0.1:${PORT}/${M3U8_NAME}"
 
 echo "🚀 Iniciando servidor proxy na porta $PORT..."
 
-# Mata processos anteriores na porta 8080
+# Mata processos anteriores do Python nessa porta
 pkill -f "python.*${PORT}" 2>/dev/null || true
 
-# ---- Servidor Python (proxy HLS) ----
+# ---------- Servidor Python (proxy HLS) ----------
 python3 - <<'PY' &
 import http.server, urllib.request, urllib.parse, urllib.error
 from urllib.parse import urljoin, urlparse, parse_qs, quote, unquote
@@ -47,7 +48,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         path = self.path
         self.log(f"Requisição recebida: {path}")
 
-        # m3u8 principal
+        # 1) m3u8 principal (reescreve URIs para /proxy?u=)
         if path == f'/{M3U8_NAME}':
             try:
                 url = urljoin(BASE_URL, M3U8_NAME)
@@ -88,7 +89,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error(502, f'Erro ao obter m3u8: {e}')
             return
 
-        # Proxy genérico
+        # 2) Proxy genérico /proxy?u=<absoluto>
         if path.startswith('/proxy'):
             try:
                 q = parse_qs(urlparse(path).query)
@@ -96,7 +97,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 if not target:
                     self.send_error(400, 'Parâmetro u ausente')
                     return
-                target = unquote(target)
+                target = urllib.parse.unquote(target)
                 data, ct = fetch(target)
                 self.send_response(200)
                 self.send_header('Content-Type', ct or guess_ct(target))
@@ -110,7 +111,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error(502, f'Erro no proxy: {e}')
             return
 
-        # Fallback: segmentos diretos
+        # 3) Fallback: caminho relativo direto
         try:
             rel = path.lstrip('/')
             target = urljoin(BASE_URL, rel)
@@ -129,7 +130,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 if __name__ == '__main__':
     from socketserver import TCPServer
     srv = TCPServer(('', PORT), ProxyHandler)
-    print(f"✅ SERVIDOR PROXY ATIVO! URL: http://127.0.0.1:{PORT}/{M3U8_NAME}", flush=True)
+    print(f"✅ PROXY ATIVO → http://127.0.0.1:{PORT}/{M3U8_NAME}", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
@@ -139,10 +140,10 @@ PY
 SERVER_PID=$!
 trap 'echo "🧹 Encerrando..."; kill $SERVER_PID 2>/dev/null || true' EXIT
 
-# ---- Aguarda o servidor responder ao m3u8 ----
-echo "⏳ Aguardando http://127.0.0.1:${PORT}/${M3U8_NAME} ficar disponível..."
+# ---------- Aguarda o endpoint responder ----------
+echo "⏳ Aguardando $URL ficar disponível..."
 for i in {1..30}; do
-  if curl -fsS "http://127.0.0.1:${PORT}/${M3U8_NAME}" >/dev/null; then
+  if curl -fsS "$URL" >/dev/null; then
     echo "✅ Servidor OK."
     break
   fi
@@ -153,29 +154,40 @@ for i in {1..30}; do
   fi
 done
 
-# ---- Verificações de ADB/Dispositivo ----
-if ! command -v adb >/dev/null 2>&1; then
-  echo "❌ adb não encontrado no PATH. Instale o Android Platform Tools."
-  exit 1
+# ---------- Abre o chooser no Android (prioriza Termux) ----------
+open_ok=false
+
+# 1) Termux (recomendado)
+if command -v termux-open-url >/dev/null 2>&1; then
+  echo "📱 Abrindo pelo Termux (chooser)..."
+  if termux-open-url "$URL"; then
+    open_ok=true
+  fi
 fi
 
-if ! adb get-state 1>/dev/null 2>&1; then
-  echo "❌ Nenhum dispositivo ADB detectado. Conecte/autorize o telefone e tente de novo."
-  exit 1
+# 2) ADB (fallback)
+if [[ "$open_ok" = false ]] && command -v adb >/dev/null 2>&1 && adb get-state 1>/dev/null 2>&1; then
+  echo "📱 Abrindo via ADB (chooser forçado)..."
+  if adb shell am start -a android.intent.action.VIEW \
+        -d "$URL" \
+        -t "application/vnd.apple.mpegurl" \
+        --chooser 1>/dev/null; then
+    open_ok=true
+  else
+    echo "⚠️ Tentando MIME alternativo..."
+    adb shell am start -a android.intent.action.VIEW \
+        -d "$URL" \
+        -t "application/x-mpegURL" \
+        --chooser || true
+    open_ok=true
+  fi
 fi
 
-# ---- Força o popup “Abrir com…” no Android ----
-echo "📱 Abrindo chooser no Android para o HLS..."
-if ! adb shell am start -a android.intent.action.VIEW \
-   -d "http://127.0.0.1:${PORT}/${M3U8_NAME}" \
-   -t "application/vnd.apple.mpegurl" \
-   --chooser 1>/dev/null; then
-  echo "⚠️ Falhou com application/vnd.apple.mpegurl, tentando application/x-mpegURL..."
-  adb shell am start -a android.intent.action.VIEW \
-     -d "http://127.0.0.1:${PORT}/${M3U8_NAME}" \
-     -t "application/x-mpegURL" \
-     --chooser
+# 3) Sem Termux/API nem ADB — instrução
+if [[ "$open_ok" = false ]]; then
+  echo "ℹ️ Não encontrei nem Termux:API (termux-open-url) nem ADB."
+  echo "Abra manualmente no celular: $URL"
 fi
 
-echo "🎬 Seletor de apps aberto. Escolha o player."
+echo "🎬 Seletor de apps deve aparecer agora. Pressione Ctrl+C para encerrar quando quiser."
 wait $SERVER_PID

@@ -4,6 +4,7 @@ echo "🚀 Iniciando servidor proxy..."
 # Mata processos anteriores na porta 8080
 pkill -f "python.*8080" 2>/dev/null
 
+# Inicia servidor Python em background
 python3 -c "
 import http.server
 import urllib.request
@@ -51,42 +52,23 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
 try:
     server = http.server.HTTPServer(('0.0.0.0', 8080), ProxyHandler)
-    print('')
     print('🎬 SERVIDOR PROXY ATIVO!')
-    print('═══════════════════════════════════════')
     print('URL LOCAL: http://127.0.0.1:8080/stream.m3u8')
-    print('═══════════════════════════════════════')
-    print('⏳ Aguardando 5 segundos para abrir no VLC...')
-    print('')
-    
-    # Inicia o servidor em background
-    import threading
-    server_thread = threading.Thread(target=server.serve_forever)
-    server_thread.daemon = True
-    server_thread.start()
-    
-    # Aguarda 5 segundos
-    import time
-    time.sleep(5)
-    
+    server.serve_forever()
+except KeyboardInterrupt:
+    print('\nServidor parado!')
+except Exception as e:
+    print(f'Erro ao iniciar servidor: {e}')
 " &
 
-# Aguarda o servidor iniciar
+# Aguarda o servidor iniciar completamente
 sleep 5
 
-# Tenta abrir no VLC via Intent
-echo "🎬 Abrindo no VLC..."
+# Tenta abrir no VLC via Intent do Android
 am start -a android.intent.action.VIEW -d "http://127.0.0.1:8080/stream.m3u8" -t "video/*"
 
-# Aguarda um pouco e mostra instruções
+# Aguarda um pouco para o intent processar
 sleep 2
-echo ""
-echo "🎯 Se não abriu automaticamente:"
-echo "1. Abra o VLC manualmente"  
-echo "2. Menu > Abrir URL de Rede"
-echo "3. Cole: http://127.0.0.1:8080/stream.m3u8"
-echo ""
-echo "Pressione Ctrl+C para parar o servidor"
 
-# Volta para o servidor em foreground
+# Aguarda o servidor em background
 wait

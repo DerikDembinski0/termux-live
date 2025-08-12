@@ -16,7 +16,7 @@ import http.server, urllib.request, urllib.parse, urllib.error
 from urllib.parse import urljoin, urlparse, parse_qs, quote, unquote
 
 PORT = 8080
-BASE_URL = 'https://cdn001.wclouda.site/K/karate-kid-lendas-2025/stream/stream.m3u8'
+BASE_URL = 'https://cdn001.wclouda.site/C/como-treinar-o-seu-dragao-2025/stream/stream.m3u8'
 M3U8_NAME = 'stream.m3u8'
 HEADERS = {
     'Referer': 'https://www.weekseries.info/',
@@ -191,4 +191,5 @@ fi
 
 echo "🎬 Seletor de apps deve aparecer agora. Pressione Ctrl+C para encerrar quando quiser."
 wait $SERVER_PID
+
 

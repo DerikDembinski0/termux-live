@@ -1,72 +1,75 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
 
-# ===== CONFIG =====
+# ========= CONFIG =========
 URL="https://beautifulpeople.goodcdn.cf/globo-sp/tracks-v1a1/mono.ts.m3u8"
 HOST="beautifulpeople.goodcdn.cf"
 UA="Mozilla/5.0 (Android 14; Termux)"
 REF="https://beautifulpeople.goodcdn.cf/"
 HTTP_PORT=8080
-# ==================
 
-say() { printf '%s\n' "$*" >&2; }
+# Coloque aqui os IPs candidatos do host (primeiro = prioritário).
+# O primeiro deve ser o que você viu no DevTools (Remote Address).
+IP_CANDIDATES=("172.67.201.5")
+# Você pode adicionar mais, ex: IP_CANDIDATES=("172.67.201.5" "104.21.32.100")
+# ==========================
 
-# --- Resolve IP via DoH (Cloudflare 1.1.1.1, sem usar DNS do sistema) ---
-resolve_ip() {
-  local host="$1"
-  # Cloudflare DoH retorna JSON; pegamos o primeiro A
-  # Ex.: https://1.1.1.1/dns-query?name=example.com&type=A
-  local json
-  json="$(curl -s --retry 3 --retry-delay 1 \
-    -H 'accept: application/dns-json' \
-    "https://1.1.1.1/dns-query?name=${host}&type=A")" || return 1
+say(){ printf '%s\n' "$*" >&2; }
 
-  # Extrai o primeiro "data":"x.x.x.x"
-  echo "$json" | grep -oE '"data":"([0-9]{1,3}\.){3}[0-9]{1,3}"' | head -1 | sed 's/.*"data":"\([^"]*\)".*/\1/'
-}
-
-say "🔎 Resolvendo IP para $HOST via DoH (Cloudflare)…"
-IP="$(resolve_ip "$HOST" || true)"
-
-if [[ -z "${IP:-}" ]]; then
-  say "❌ Falha ao resolver via DoH. Abortei."
-  exit 1
-fi
-say "✅ IP: $IP"
-
-# --- Preparação de pastas / server local ---
 mkdir -p hls
-# derruba http.server antigo se houver
+# mata http.server antigo
 pkill -f "python3 -m http.server ${HTTP_PORT}" >/dev/null 2>&1 || true
 ( cd hls && nohup python3 -m http.server "${HTTP_PORT}" >/dev/null 2>&1 & )
 sleep 2
 
-# --- Baixa a playlist forçando conectar no IP, mantendo SNI/Host ---
-# Usamos --connect-to para não depender de DNS e ainda manter o Host/SNI corretos
-say "⬇️  Baixando playlist com curl --connect-to (bypass DNS, SNI ok)…"
-curl -sS --retry 3 --retry-delay 1 \
-  -A "$UA" -e "$REF" \
-  --connect-to "${HOST}:443:${IP}:443" \
-  -L "$URL" -o hls/remote.m3u8
+fetch_playlist() {
+  local ip_opt="$1"
+  local curl_args=(-sS --retry 2 --retry-delay 1 -A "$UA" -e "$REF" -L "$URL" -o hls/remote.m3u8)
 
-# Validação simples
-if ! grep -qE '\.ts($|\?)' hls/remote.m3u8; then
-  say "❌ Playlist baixada não parece conter segmentos .ts. Conteúdo:"
-  head -n 50 hls/remote.m3u8 >&2
-  exit 1
+  if [[ -n "$ip_opt" ]]; then
+    # força conectar no IP mas mantendo SNI/Host (TLS válido)
+    curl_args=( -sS --retry 2 --retry-delay 1 -A "$UA" -e "$REF" --connect-to "${HOST}:443:${ip_opt}:443" -L "$URL" -o hls/remote.m3u8 )
+    say "⬇️  Baixando playlist via IP ${ip_opt} (connect-to)…"
+  else
+    say "⬇️  Tentando baixar playlist via hostname (se DNS estiver ok)…"
+  fi
+
+  if ! curl "${curl_args[@]}"; then
+    return 1
+  fi
+
+  # precisa conter segmentos .ts
+  grep -qE '\.ts($|\?)' hls/remote.m3u8
+}
+
+BASE="$(echo "$URL" | sed -E 's@^(https://[^/]+/.*/)[^/]+$@\1@')"
+
+# 1) Tenta com hostname (caso o DNS funcione no seu device)
+if fetch_playlist ""; then
+  say "✅ Playlist baixada via hostname."
+else
+  say "⚠️  DNS/hostname falhou. Vou testar IPs fixos…"
+  success=0
+  for ip in "${IP_CANDIDATES[@]}"; do
+    if fetch_playlist "$ip"; then
+      say "✅ Playlist baixada via IP ${ip}."
+      success=1
+      break
+    else
+      say "❌ Falhou com IP ${ip}. Testando próximo…"
+    fi
+  done
+  [[ $success -eq 1 ]] || { say "❌ Não consegui baixar a playlist com nenhum IP."; exit 1; }
 fi
 
-# --- Constrói BASE (prefixo absoluto) e reescreve caminhos relativos ---
-BASE="$(echo "$URL" | sed -E 's@^(https://[^/]+/.*/)[^/]+$@\1@')"
-# Reescreve linhas não-comentadas que terminam com .m3u8 ou .ts para URLs absolutas,
-# sem alterar linhas que já são absolutas (começam com http)
+# 2) Reescreve caminhos relativos (.ts/.m3u8) para absolutos
 sed -E "
   s@^([^#hH].*\.m3u8)([[:space:]]*)$@${BASE}\1\2@g;
   s@^([^#hH].*\.ts)([[:space:]]*)$@${BASE}\1\2@g;
 " hls/remote.m3u8 > hls/fixed.m3u8
 
-# --- Inicia o FFmpeg lendo a playlist local (mas puxando os .ts por HTTPS) ---
-say "▶️  Iniciando FFmpeg…"
+# 3) Inicia o FFmpeg lendo a playlist local (mas baixando .ts por HTTPS)
+say '▶️  Iniciando FFmpeg…'
 ffmpeg \
   -user_agent "$UA" \
   -headers "Referer: $REF\r\nHost: $HOST\r\nOrigin: $REF\r\n" \

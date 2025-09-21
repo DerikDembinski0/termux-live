@@ -11,7 +11,7 @@ HTTP_PORT=8080
 
 say(){ printf '%s\n' "$*" >&2; }
 
-# --- Resolve IP via DNS-over-HTTPS Cloudflare ---
+# --- Resolve IP via DoH ---
 say "🔎 Resolvendo IP para $HOST via 1.1.1.1 (DoH)..."
 IP="$(curl -s "https://1.1.1.1/dns-query?name=${HOST}&type=A" \
   -H 'accept: application/dns-json' \
@@ -25,13 +25,13 @@ if [[ -z "${IP:-}" ]]; then
 fi
 say "✅ IP encontrado: $IP"
 
-# --- Preparar diretório e servidor local ---
+# --- Preparar servidor local ---
 mkdir -p hls
 pkill -f "python3 -m http.server ${HTTP_PORT}" >/dev/null 2>&1 || true
 ( cd hls && nohup python3 -m http.server "${HTTP_PORT}" >/dev/null 2>&1 & )
 sleep 2
 
-# --- Baixar playlist .m3u8 ---
+# --- Baixar playlist ---
 say "⬇️ Baixando playlist..."
 curl -sS \
   -A "$UA" -e "$REF" \
@@ -39,7 +39,7 @@ curl -sS \
   -L "$URL" -o hls/remote.m3u8
 
 if ! grep -q '\.ts' hls/remote.m3u8; then
-  say "❌ Playlist não contém .ts. Conteúdo inicial:"
+  say "❌ Playlist não contém .ts. Abortando."
   head -n 20 hls/remote.m3u8
   exit 1
 fi
